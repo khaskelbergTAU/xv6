@@ -1,0 +1,5 @@
+usertrap
+exec syscall
+user mode, since SPP bit is 0
+a3
+process initcode, pid 1
