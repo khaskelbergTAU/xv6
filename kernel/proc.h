@@ -119,3 +119,5 @@ struct proc
   char name[16];               // Process name (debugging)
   unsigned long long syscall_trace_mask;
 };
+
+uint64 proc_count(void);
