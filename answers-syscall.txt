@@ -2,4 +2,5 @@ usertrap
 exec syscall
 user mode, since SPP bit is 0
 a3
+the cause is that address 0 is unmapped, and that is confirmed by the scause = 0xd which means load page fault, since 0 isnt mapped it causes a page fault, and a load since its a load instruction
 process initcode, pid 1

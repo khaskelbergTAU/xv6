@@ -23,6 +23,7 @@ struct
 {
   struct spinlock lock;
   struct run *freelist;
+  uint64 freecount;
 } kmem;
 
 void kinit()
@@ -58,6 +59,7 @@ void kfree(void *pa)
   acquire(&kmem.lock);
   r->next = kmem.freelist;
   kmem.freelist = r;
+  kmem.freecount += 1;
   release(&kmem.lock);
 }
 
@@ -72,7 +74,10 @@ kalloc(void)
   acquire(&kmem.lock);
   r = kmem.freelist;
   if (r)
+  {
     kmem.freelist = r->next;
+    kmem.freecount -= 1;
+  }
   release(&kmem.lock);
 
   if (r)
@@ -82,11 +87,11 @@ kalloc(void)
 
 uint64 free_mem()
 {
-  struct run *r;
-  uint64 memcount = 0;
-  for (r = kmem.freelist; r != 0; r = r->next)
-  {
-    memcount += PGSIZE;
-  }
-  return memcount;
+  uint64 freecount;
+  // acquire(&kmem.lock);
+  // locking is arguable. we are only reading - and returning not quite right information since memory is just being allocated / freed isnt that bad of a thing
+  // if the caller is worried about atomicity of this, he needs to lock the kmem himself, as it can change after this function is done and before he uses the value
+  freecount = kmem.freecount;
+  // release(&kmem.lock);
+  return freecount << 12;
 }
