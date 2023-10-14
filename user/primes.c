@@ -51,7 +51,7 @@ int main(int argc, char *argv[])
   else
   {
     close(first_pipe[0]);
-    for (int val = 2; val < MAX_PRIME; val++)
+    for (unsigned int val = 2; val < MAX_PRIME; val++)
     {
       write(first_pipe[1], &val, 4);
     }

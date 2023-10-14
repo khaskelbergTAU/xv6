@@ -1,7 +1,6 @@
 #include "kernel/types.h"
 #include "user/user.h"
 
-#define MAX_LINE 512
 /**
  * this program reads line by line from stdin, and executes its arguments with the arguments from stdin appended.
 */

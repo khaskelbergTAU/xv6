@@ -12,7 +12,11 @@ int main(int argc, char *argv[])
   if (fork() == 0)
   {
     char child_buf;
-    read(p_to_c[0], &child_buf, 1);
+    if (read(p_to_c[0], &child_buf, 1) != 1)
+    {
+      printf("ping error! read failed\n");
+      return 1;
+    }
     close(p_to_c[0]);
     if (child_buf != parent_buf)
     {
@@ -26,7 +30,11 @@ int main(int argc, char *argv[])
   }
   write(p_to_c[1], &parent_buf, 1);
   close(p_to_c[1]);
-  read(c_to_p[0], &parent_result, 1);
+  if (read(c_to_p[0], &parent_result, 1) != 1)
+  {
+    printf("pong error! read failed\n");
+    return 1;
+  }
   close(c_to_p[0]);
   if (parent_result != parent_buf)
   {
