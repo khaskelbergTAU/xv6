@@ -697,3 +697,30 @@ procdump(void)
     printf("\n");
   }
 }
+
+#define ELEM_SIZE(mask) (sizeof(mask[0]) * 8)
+#define SET_BIT(mask, bit) (mask[bit/ELEM_SIZE(mask)] |= (1 << (bit % ELEM_SIZE(mask))))
+#define CLEAR_BIT(mask, bit) (mask[bit/ELEM_SIZE(mask)] &= ~(1 << (bit % ELEM_SIZE(mask))))
+#define PG_ACCESS_MAX 8192
+
+void pgaccess(pagetable_t pagetable, uint64 start_va, int len, uint64 mask)
+{
+  char ker_mask[PG_ACCESS_MAX];
+  int alloc_len = ((len + 7) / 8);
+  if (alloc_len > PG_ACCESS_MAX)
+    alloc_len = PG_ACCESS_MAX;
+  for (uint64 i = 0; i < len; start_va += PGSIZE, i++)
+  {
+    pte_t *entry = walk(pagetable, start_va, 0);
+    if (*entry & PTE_A)
+    {
+      *entry &= ~PTE_A;
+      SET_BIT(ker_mask, i);
+    }
+    else
+    {
+      CLEAR_BIT(ker_mask, i);
+    }
+  }
+  copyout(pagetable, mask, ker_mask, alloc_len);
+}
