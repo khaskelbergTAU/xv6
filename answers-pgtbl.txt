@@ -1,0 +1,5 @@
+the only syscall i see that could be sped up is fstat, which could get its data initialized when open is called, and get it updated on file writes.
+
+page 0 is the text section. after that is data, which is readable and writable by the user as the U,R,W bits are section
+page 2 is the guard page, and is therefore not accessable by the user
+the third to last page is the USYSCALL area we set up, but is unused in figure 3-4.
