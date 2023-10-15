@@ -1,0 +1,16 @@
+a0-a7 registers hold function arguments, a2 holds the 13 in mains call to printf.
+there is no call, the compiler inserted the value of f(8) + 1 which is 12.
+printf is located at 0x642, as we can see by the fact that the call to printf is the sequence
+auipc ra,0x0
+jalr 1554(ra)
+which means move pc to ra which means ra is 0x30, and then the offset 1554 is added to it and jumped to
+1554 + 0x30 = 0x642
+
+the value will be 0x38, which is 0x34 + 4 since thats the address of the jalr instruction.
+
+the code will output He11o World, since the hex value of 57616 is 0xe110
+and the bytes of i when written in little endian are 0x72, 0x6c, 0x63, 0x00 which is r, l, d and the null byte that terminates C strings
+if the machine was big endian, 57616 wouldnt need to be changed since it would be the same value, and i would nee to become 0x726c6400
+
+the value printed is going to be whatever was in a2 when the function was called - 
+probably the third argument to the previous function that took at least three variables that was called
