@@ -29,6 +29,67 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+void alarm_save_regs(struct alarmframe *a, struct trapframe *t)
+{
+  a->pc = t->epc;
+  a->ra = t->ra;
+  a->sp = t->sp;
+  a->gp = t->gp;
+  a->tp = t->tp;
+  a->a0 = t->a0;
+  a->a1 = t->a1;
+  a->s0 = t->s0;
+  a->s1 = t->s1;
+  a->s2 = t->s2;
+  a->s3 = t->s3;
+  a->s4 = t->s4;
+  a->s5 = t->s5;
+  a->s6 = t->s6;
+  a->s7 = t->s7;
+  a->s8 = t->s8;
+  a->s9 = t->s9;
+  a->s10 = t->s10;
+  a->s11 = t->s11;
+  a->t0 = t->t0;
+  a->t1 = t->t1;
+  a->t2 = t->t2;
+  a->t3 = t->t3;
+  a->t4 = t->t4;
+  a->t5 = t->t5;
+  a->t6 = t->t6;
+}
+
+void alarm_restore_regs(struct alarmframe *a, struct trapframe *t)
+{
+  t->epc = a->pc;
+  t->ra = a->ra;
+  t->sp = a->sp;
+  t->gp = a->gp;
+  t->tp = a->tp;
+  t->a0 = a->a0;
+  t->a1 = a->a1;
+  t->s0 = a->s0;
+  t->s1 = a->s1;
+  t->s2 = a->s2;
+  t->s3 = a->s3;
+  t->s4 = a->s4;
+  t->s5 = a->s5;
+  t->s6 = a->s6;
+  t->s7 = a->s7;
+  t->s8 = a->s8;
+  t->s9 = a->s9;
+  t->s10 = a->s10;
+  t->s11 = a->s11;
+  t->t0 = a->t0;
+  t->t1 = a->t1;
+  t->t2 = a->t2;
+  t->t3 = a->t3;
+  t->t4 = a->t4;
+  t->t5 = a->t5;
+  t->t6 = a->t6;
+}
+
+
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -78,7 +139,15 @@ usertrap(void)
 
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2)
+  {
+    if ((p->alarm) && (p->interval > 0) && (ticks - p->last_call_ticks >= p->interval))
+    {
+      p->alarm = 0;
+      alarm_save_regs(&p->alarmframe, p->trapframe);
+      p->trapframe->epc = (uint64)p->alarm_cb;
+    }
     yield();
+  }
 
   usertrapret();
 }

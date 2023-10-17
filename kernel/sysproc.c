@@ -92,3 +92,28 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+
+uint64 sys_sigalarm(void)
+{
+  int n;
+  void (*fn)(void);
+  argint(0, &n);
+  argaddr(1, (uint64 *)&fn);
+  struct proc *p = myproc();
+  p->interval = n;
+  p->alarm_cb = fn;
+  p->last_call_ticks = 0;
+  p->alarm = 1;
+  return 0;
+}
+
+
+uint64 sys_sigreturn(void)
+{
+  struct proc *p = myproc();
+  alarm_restore_regs(&p->alarmframe, p->trapframe);
+  p->alarm = 1;
+  p->last_call_ticks = ticks;
+  return p->trapframe->a0;
+}
