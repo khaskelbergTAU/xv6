@@ -103,7 +103,7 @@ uint64 sys_sigalarm(void)
   struct proc *p = myproc();
   p->interval = n;
   p->alarm_cb = fn;
-  p->last_call_ticks = 0;
+  p->last_call_ticks = ticks;
   p->alarm = 1;
   return 0;
 }
