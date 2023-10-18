@@ -8,6 +8,8 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct superblock;
+struct alarmframe;
+struct trapframe;
 
 // bio.c
 void            binit(void);
@@ -80,6 +82,7 @@ int             pipewrite(struct pipe*, uint64, int);
 void            printf(char*, ...);
 void            panic(char*) __attribute__((noreturn));
 void            printfinit(void);
+void            backtrace(void);
 
 // proc.c
 int             cpuid(void);
@@ -147,6 +150,8 @@ void            trapinit(void);
 void            trapinithart(void);
 extern struct spinlock tickslock;
 void            usertrapret(void);
+void alarm_save_regs(struct alarmframe *, struct trapframe *);
+void alarm_restore_regs(struct alarmframe *, struct trapframe *);
 
 // uart.c
 void            uartinit(void);
