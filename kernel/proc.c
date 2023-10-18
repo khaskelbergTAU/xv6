@@ -132,6 +132,13 @@ found:
     return 0;
   }
 
+  if ((p->usyscall = (struct usyscall *)kalloc()) == 0) {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  p->usyscall->pid = p->pid;
+
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -158,6 +165,9 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  if (p->usyscall)
+    kfree((void *)p->usyscall);
+  p->usyscall = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
@@ -193,11 +203,18 @@ proc_pagetable(struct proc *p)
     return 0;
   }
 
+  if (mappages(pagetable, USYSCALL, PGSIZE,
+               (uint64)p->usyscall, PTE_R | PTE_U) < 0) {
+    uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+    uvmfree(pagetable, 0);
+    return 0;
+  }
   // map the trapframe page just below the trampoline page, for
   // trampoline.S.
   if(mappages(pagetable, TRAPFRAME, PGSIZE,
               (uint64)(p->trapframe), PTE_R | PTE_W) < 0){
     uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+    uvmunmap(pagetable, USYSCALL, 1, 0);
     uvmfree(pagetable, 0);
     return 0;
   }
@@ -211,6 +228,7 @@ void
 proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+  uvmunmap(pagetable, USYSCALL, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
   uvmfree(pagetable, sz);
 }
@@ -680,4 +698,31 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+#define ELEM_SIZE(mask) (sizeof(mask[0]) * 8)
+#define SET_BIT(mask, bit) (mask[bit/ELEM_SIZE(mask)] |= (1 << (bit % ELEM_SIZE(mask))))
+#define CLEAR_BIT(mask, bit) (mask[bit/ELEM_SIZE(mask)] &= ~(1 << (bit % ELEM_SIZE(mask))))
+#define PG_ACCESS_MAX 8192
+
+void pgaccess(pagetable_t pagetable, uint64 start_va, int len, uint64 mask)
+{
+  char ker_mask[PG_ACCESS_MAX];
+  int alloc_len = ((len + 7) / 8);
+  if (alloc_len > PG_ACCESS_MAX)
+    alloc_len = PG_ACCESS_MAX;
+  for (uint64 i = 0; i < len; start_va += PGSIZE, i++)
+  {
+    pte_t *entry = walk(pagetable, start_va, 0);
+    if (*entry & PTE_A)
+    {
+      *entry &= ~PTE_A;
+      SET_BIT(ker_mask, i);
+    }
+    else
+    {
+      CLEAR_BIT(ker_mask, i);
+    }
+  }
+  copyout(pagetable, mask, ker_mask, alloc_len);
 }
