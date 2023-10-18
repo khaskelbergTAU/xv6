@@ -296,6 +296,28 @@ uvmfree(pagetable_t pagetable, uint64 sz)
   freewalk(pagetable);
 }
 
+// used to copy pages that are marked with COW
+// va must be page aligned
+int uvmcow(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte = walk(pagetable, va, 0);
+  int perm = PTE_FLAGS(*pte);
+  uint64 pa = PTE2PA(*pte);
+  if (!(perm & PTE_COW) || (perm & PTE_W))
+  {
+    printf("uvmcow(): incorrect permissions %d at address %x", perm, pa);
+    panic("uvmcow");
+  }
+  perm |= PTE_W;
+  perm &= ~PTE_COW;
+  uint64 copy_pa = (uint64)kalloc();
+  if (copy_pa == 0)
+    return -1;
+  memmove((void *)copy_pa, (void *)pa, PGSIZE);
+  uvmunmap(pagetable, va, 1, 1);
+  return mappages(pagetable, va, PGSIZE, copy_pa, perm);
+}
+
 // Given a parent process's page table, copy
 // its memory into a child's page table.
 // Copies both the page table and the
@@ -308,7 +330,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -316,12 +337,14 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+    if (*pte & PTE_W)
+    {
+      *pte &= ~(PTE_W);
+      *pte |= PTE_COW;
+    }
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    inc_ref((void *)pa);
+    if (mappages(new, i, PGSIZE, pa, flags) != 0) {
       goto err;
     }
   }
@@ -352,9 +375,20 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
+  pte_t *pte0;
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+    if (va0 > MAXVA)
+      return -1;
+    pte0 = walk(pagetable, va0, 0);
+    if (pte0 == 0)
+      return -1;
+    if (*pte0 & PTE_COW)
+    {
+      if (uvmcow(pagetable, va0) != 0)
+        return -1;
+    }
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
