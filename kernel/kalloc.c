@@ -88,6 +88,7 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&page_refs.lock, "pagerefs");
   initrange(end, (void *)PHYSTOP);
 }
 
