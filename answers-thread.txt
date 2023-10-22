@@ -1,0 +1,2 @@
+this could happen if two values in the same bucket get inserted at the same time
+the insert function will be called with the same entry on two different values, causing a memory leak aswell as a lost key

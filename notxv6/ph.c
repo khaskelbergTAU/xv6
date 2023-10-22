@@ -14,6 +14,7 @@ struct entry {
   struct entry *next;
 };
 struct entry *table[NBUCKET];
+pthread_mutex_t bucket_locks[NBUCKET];
 int keys[NKEYS];
 int nthread = 1;
 
@@ -43,6 +44,7 @@ void put(int key, int value)
 
   // is the key already present?
   struct entry *e = 0;
+  pthread_mutex_lock(&bucket_locks[i]);
   for (e = table[i]; e != 0; e = e->next) {
     if (e->key == key)
       break;
@@ -54,18 +56,19 @@ void put(int key, int value)
     // the new is new.
     insert(key, value, &table[i], table[i]);
   }
-
+  pthread_mutex_unlock(&bucket_locks[i]);
 }
 
-static struct entry*
+static struct entry *
 get(int key)
 {
   int i = key % NBUCKET;
 
-
   struct entry *e = 0;
-  for (e = table[i]; e != 0; e = e->next) {
-    if (e->key == key) break;
+  for (e = table[i]; e != 0; e = e->next)
+  {
+    if (e->key == key)
+      break;
   }
 
   return e;
@@ -74,11 +77,12 @@ get(int key)
 static void *
 put_thread(void *xa)
 {
-  int n = (int) (long) xa; // thread number
-  int b = NKEYS/nthread;
+  int n = (int)(long)xa; // thread number
+  int b = NKEYS / nthread;
 
-  for (int i = 0; i < b; i++) {
-    put(keys[b*n + i], n);
+  for (int i = 0; i < b; i++)
+  {
+    put(keys[b * n + i], n);
   }
 
   return NULL;
@@ -87,29 +91,35 @@ put_thread(void *xa)
 static void *
 get_thread(void *xa)
 {
-  int n = (int) (long) xa; // thread number
+  int n = (int)(long)xa; // thread number
   int missing = 0;
 
-  for (int i = 0; i < NKEYS; i++) {
+  for (int i = 0; i < NKEYS; i++)
+  {
     struct entry *e = get(keys[i]);
-    if (e == 0) missing++;
+    if (e == 0)
+      missing++;
   }
   printf("%d: %d keys missing\n", n, missing);
   return NULL;
 }
 
-int
-main(int argc, char *argv[])
+int main(int argc, char *argv[])
 {
   pthread_t *tha;
   void *value;
   double t1, t0;
 
-
-  if (argc < 2) {
+  if (argc < 2)
+  {
     fprintf(stderr, "Usage: %s nthreads\n", argv[0]);
     exit(-1);
   }
+  for (int i = 0; i < NBUCKET; i++)
+  {
+    pthread_mutex_init(&bucket_locks[i], NULL);
+  }
+
   nthread = atoi(argv[1]);
   tha = malloc(sizeof(pthread_t) * nthread);
   srandom(0);
