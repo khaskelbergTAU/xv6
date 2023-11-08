@@ -17,7 +17,7 @@ extern char end[]; // first address after kernel.
 struct run {
   struct run *next;
 };
-
+char locknames[20][NCPU];
 struct {
   struct spinlock locks[NCPU];
   struct run *freelists[NCPU];
@@ -28,9 +28,8 @@ kinit()
 {
   for (unsigned int cpu = 0; cpu < NCPU; cpu++)
   {
-    char kmem_lock_name[20];
-    snprintf(kmem_lock_name, 20, "kmem_%d", cpu);
-    initlock(&kmem.locks[cpu], kmem_lock_name);
+    snprintf(locknames[cpu], 20, "kmem_%d", cpu);
+    initlock(&kmem.locks[cpu], locknames[cpu]);
   }
   freerange(end, (void*)PHYSTOP);
 }
