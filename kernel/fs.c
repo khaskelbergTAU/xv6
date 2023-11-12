@@ -732,3 +732,31 @@ nameiparent(char *path, char *name)
 {
   return namex(path, 1, name);
 }
+
+// ip must be locked
+struct inode *followlink(struct inode *ip)
+{
+  uint depth = 0;
+  while (ip->type == T_SYMLINK)
+  {
+    if (depth++ > MAXSYMLINK)
+    {
+      iunlock(ip);
+      return 0;
+    }
+    char buf[MAXPATH];
+    int n = readi(ip, 0, (uint64)buf, 0, MAXPATH);
+    if (n <= 0)
+    {
+      iunlock(ip);
+      return 0;
+    }
+    buf[n] = '\0';
+    iunlock(ip);
+    ip = namei(buf);
+    if (ip == 0)
+      return 0;
+    ilock(ip);
+  }
+  return ip;
+}
