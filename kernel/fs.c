@@ -417,6 +417,43 @@ bmap(struct inode *ip, uint bn)
     return addr;
   }
 
+  bn -= NINDIRECT;
+  if (bn < NININDIRECT)
+  {
+    // load inindirect block, allocating if necessary
+    if ((addr = ip->addrs[NDIRECT + 1]) == 0)
+    {
+      addr = balloc(ip->dev);
+      if (addr == 0)
+        return 0;
+      ip->addrs[NDIRECT + 1] = addr;
+    }
+    bp = bread(ip->dev, addr);
+    a = (uint *)bp->data;
+    if ((addr = a[bn / NINDIRECT]) == 0)
+    {
+      addr = balloc(ip->dev);
+      if (addr == 0)
+        return 0;
+      a[bn / NINDIRECT] = addr;
+      log_write(bp);
+    }
+    brelse(bp);
+    bn = bn % NINDIRECT;
+    bp = bread(ip->dev, addr);
+    a = (uint *)bp->data;
+    if ((addr = a[bn]) == 0)
+    {
+      addr = balloc(ip->dev);
+      if (addr == 0)
+        return 0;
+      a[bn] = addr;
+      log_write(bp);
+    }
+    brelse(bp);
+    return addr;
+  }
+
   panic("bmap: out of range");
 }
 
@@ -446,6 +483,30 @@ itrunc(struct inode *ip)
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
+  }
+  if (ip->addrs[NDIRECT + 1])
+  {
+    bp = bread(ip->dev, ip->addrs[NDIRECT]);
+    a = (uint *)bp->data;
+    for (j = 0; j < NINDIRECT; j++)
+    {
+      struct buf *bp2;
+      if (a[j])
+      {
+        bp2 = bread(ip->dev, a[j]);
+        uint *a2 = (uint *)bp2->data;
+        for (int k = 0; k < NINDIRECT; k++)
+        {
+          if (a2[k])
+            bfree(ip->dev, a2[k]);
+        }
+        brelse(bp2);
+        bfree(ip->dev, a[j]);
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT + 1]);
+    ip->addrs[NDIRECT + 1] = 0;
   }
 
   ip->size = 0;
@@ -694,4 +755,32 @@ struct inode*
 nameiparent(char *path, char *name)
 {
   return namex(path, 1, name);
+}
+
+// ip must be locked
+struct inode *followlink(struct inode *ip)
+{
+  uint depth = 0;
+  while (ip->type == T_SYMLINK)
+  {
+    if (depth++ > MAXSYMLINK)
+    {
+      iunlock(ip);
+      return 0;
+    }
+    char buf[MAXPATH];
+    int n = readi(ip, 0, (uint64)buf, 0, MAXPATH);
+    if (n <= 0)
+    {
+      iunlock(ip);
+      return 0;
+    }
+    buf[n] = '\0';
+    iunlock(ip);
+    ip = namei(buf);
+    if (ip == 0)
+      return 0;
+    ilock(ip);
+  }
+  return ip;
 }
