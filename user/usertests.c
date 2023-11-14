@@ -585,12 +585,17 @@ writebig(char *s)
     printf("%s: error: creat big failed!\n", s);
     exit(1);
   }
+  printf("opened big\n");
 
   for(i = 0; i < MAXFILE; i++){
     ((int*)buf)[0] = i;
     if(write(fd, buf, BSIZE) != BSIZE){
       printf("%s: error: write big file failed\n", s, i);
       exit(1);
+    }
+    if ((i % 100) == 0)
+    {
+      printf(".");
     }
   }
 
@@ -601,12 +606,14 @@ writebig(char *s)
     printf("%s: error: open big failed!\n", s);
     exit(1);
   }
+  printf("reading big\n");
 
   n = 0;
   for(;;){
     i = read(fd, buf, BSIZE);
     if(i == 0){
-      if(n == MAXFILE - 1){
+      if (n <= MAXFILE - 1)
+      {
         printf("%s: read only %d blocks from big", s, n);
         exit(1);
       }
@@ -621,6 +628,10 @@ writebig(char *s)
       exit(1);
     }
     n++;
+    if ((n % 100) == 0)
+    {
+      printf(".");
+    }
   }
   close(fd);
   if(unlink("big") < 0){
