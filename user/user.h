@@ -39,5 +39,5 @@ void free(void*);
 int atoi(const char*);
 int memcmp(const void *, const void *, uint);
 void *memcpy(void *, const void *, uint);
-void *mmap(void *addr, uint length, int prot, int flags, int fd, uint offset);
+void *mmap(void *addr, uint64 length, int prot, int flags, int fd, uint64 offset);
 int munmap(void *addr, uint length);

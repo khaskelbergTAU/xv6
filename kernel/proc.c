@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -145,8 +149,31 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+  for (uint i = 0; i < NMMAPED; i++)
+  {
+    p->mmaped_files[i].used = 0;
+  }
+  p->mmap_end = MMAP_END;
 
   return p;
+}
+
+static void proc_freemmapped(struct proc *p)
+{
+  for (uint i = 0; i < NMMAPED; i++)
+  {
+    if (p->mmaped_files[i].used)
+    {
+      for (uint64 addr = p->mmaped_files[i].addr; addr < p->mmaped_files[i].addr + p->mmaped_files[i].size; addr += PGSIZE)
+      {
+        pte_t *pte = walk(p->pagetable, addr, 0);
+        if ((pte != 0) && (*pte & PTE_V))
+        { // todo: check map_shared
+          uvmunmap(p->pagetable, addr, 1, 1);
+        }
+      }
+    }
+  }
 }
 
 // free a proc structure and the data hanging from it,
@@ -158,10 +185,12 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  proc_freemmapped(p);
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
   p->sz = 0;
+  p->mmap_end = MMAP_END;
   p->pid = 0;
   p->parent = 0;
   p->name[0] = 0;
@@ -680,4 +709,110 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+uint64 mmap(uint64 addr, uint64 length, int prot, int flags, int fd, uint64 offset)
+{
+  // addr and offset are always 0.
+  if (length == 0)
+  {
+    return -1;
+  }
+  if (prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC))
+  { // some unknown permission is set
+    return -1;
+  }
+  if (prot == 0)
+  { // no permissions are set
+    return -1;
+  }
+  struct proc *p = myproc();
+  if (p->ofile[fd] == 0)
+  {
+    return -1;
+  }
+  if (length > PGROUNDUP(p->ofile[fd]->ip->size))
+  {
+    return -1;
+  }
+  uint entry = 0;
+  for (entry = 0; entry < NMMAPED; entry++)
+  {
+    if (p->mmaped_files[entry].used == 0)
+    {
+      break;
+    }
+  }
+  if (entry == NMMAPED)
+  {
+    return -1;
+  }
+
+  uint64 rounded_size = PGROUNDUP(length);
+  struct file_vma_info *file_vma = &p->mmaped_files[entry];
+  file_vma->addr = p->mmap_end - rounded_size;
+  file_vma->used = 1;
+  p->mmap_end = file_vma->addr;
+  file_vma->size = length;
+  file_vma->prot = prot;
+  file_vma->flags = flags;
+  file_vma->file = filedup(p->ofile[fd]);
+  printf("mmapped file %d to address %p of size %p\n", fd, file_vma->addr, file_vma->size);
+  return (uint64)file_vma->addr;
+}
+
+struct file_vma_info *find_vma(struct proc *p, uint64 addr)
+{
+  for (uint i = 0; i < NMMAPED; i++)
+  {
+    if (p->mmaped_files[i].used && (p->mmaped_files[i].addr <= addr) && (p->mmaped_files[i].addr + p->mmaped_files[i].size) > addr)
+    {
+      return &p->mmaped_files[i];
+    }
+  }
+  return 0;
+}
+
+int handle_mmap_fault(struct proc *p, uint64 addr)
+{
+  struct file_vma_info *file_vma = find_vma(p, addr);
+  if (file_vma == 0)
+  {
+    return -1;
+  }
+  if (addr - file_vma->addr >= PGROUNDUP(file_vma->size))
+  {
+    return -1;
+  }
+  uint64 va = PGROUNDDOWN(addr);
+  void *pa = kalloc();
+  if (!pa)
+  {
+    return -1;
+  }
+  memset(pa, 0, PGSIZE);
+  ilock(file_vma->file->ip);
+  uint to_read = PGSIZE;
+  if (addr + PGSIZE > file_vma->file->ip->size + file_vma->size)
+  {
+    to_read = file_vma->addr + file_vma->file->ip->size - addr;
+  }
+  int read_amnt = readi(file_vma->file->ip, 0, (uint64)pa, PGROUNDDOWN(addr - file_vma->addr), to_read);
+  if (read_amnt < to_read)
+  {
+    iunlock(file_vma->file->ip);
+    kfree(pa);
+    return -1;
+  }
+  iunlock(file_vma->file->ip);
+  for (int i = read_amnt; i < PGSIZE; i++)
+  {
+    ((char *)pa)[i] = 0;
+  }
+  if (mappages(p->pagetable, va, PGSIZE, (uint64)pa, (file_vma->prot << 1) | PTE_U) != 0)
+  {
+    kfree(pa);
+    return -1;
+  }
+  return 0;
 }
