@@ -21,7 +21,7 @@ struct spinlock pid_lock;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
-int mmap_shared(pagetable_t pgtbl, uint64 addr, uint64 length, struct inode *ip, uint64 offset);
+int update_mmapped_file(pagetable_t pgtbl, uint64 addr, uint64 length, struct inode *ip, uint64 offset);
 
 extern char trampoline[]; // trampoline.S
 
@@ -170,7 +170,7 @@ static void proc_freemmapped(struct proc *p)
       struct file_vma_info *file_vma = &p->mmaped_files[i];
       if (file_vma->flags & MAP_SHARED)
       {
-        mmap_shared(p->pagetable, file_vma->addr, file_vma->size, file_vma->file->ip, 0);
+        update_mmapped_file(p->pagetable, file_vma->addr, file_vma->size, file_vma->file->ip, 0);
       }
       fileclose(file_vma->file);
       for (uint64 addr = file_vma->addr; addr < file_vma->addr + file_vma->size; addr += PGSIZE)
@@ -791,7 +791,6 @@ uint64 mmap(uint64 addr, uint64 length, int prot, int flags, int fd, uint64 offs
   file_vma->prot = prot;
   file_vma->flags = flags;
   file_vma->file = filedup(p->ofile[fd]);
-  printf("mmapped file %d to address %p of size %p\n", fd, file_vma->addr, file_vma->size);
   return (uint64)file_vma->addr;
 }
 
@@ -824,11 +823,10 @@ int handle_mmap_fault(struct proc *p, uint64 addr)
   {
     return -1;
   }
-  memset(pa, 0, PGSIZE);
   ilock(file_vma->file->ip);
   uint to_read = PGSIZE;
   if (PGSIZE > file_vma->file->ip->size + file_vma->addr - addr)
-  {
+  { // theres less than a page untill the end of the file
     to_read = file_vma->file->ip->size + file_vma->addr - addr;
   }
   int read_amnt = readi(file_vma->file->ip, 0, (uint64)pa, addr - file_vma->addr, to_read);
@@ -839,11 +837,8 @@ int handle_mmap_fault(struct proc *p, uint64 addr)
     return -1;
   }
   iunlock(file_vma->file->ip);
-  for (int i = read_amnt; i < PGSIZE; i++)
-  {
-    ((char *)pa)[i] = 0;
-  }
-  if (mappages(p->pagetable, va, PGSIZE, (uint64)pa, (file_vma->prot << 1) | PTE_U) != 0)
+  memset(((char *)pa) + read_amnt, 0, PGSIZE - read_amnt);
+  if (mappages(p->pagetable, va, PGSIZE, (uint64)pa, (file_vma->prot << 1) | PTE_U) != 0) // prot << 1 moves all of the permissions to the correct places
   {
     kfree(pa);
     return -1;
@@ -851,15 +846,15 @@ int handle_mmap_fault(struct proc *p, uint64 addr)
   return 0;
 }
 
-int mmap_shared(pagetable_t pgtbl, uint64 addr, uint64 length, struct inode *ip, uint64 offset)
+int update_mmapped_file(pagetable_t pgtbl, uint64 addr, uint64 length, struct inode *ip, uint64 offset)
 {
   if (addr != PGROUNDDOWN(addr))
   {
-    panic("addr");
+    panic("update_mmaped_file: addr");
   }
   if (length != PGROUNDDOWN(length))
   {
-    panic("length");
+    panic("update_mmaped_file: length");
   }
   begin_op();
   ilock(ip);
@@ -873,8 +868,6 @@ int mmap_shared(pagetable_t pgtbl, uint64 addr, uint64 length, struct inode *ip,
     int written_amount = writei(ip, 0, (uint64)PTE2PA(*pte), a - addr + offset, PGSIZE);
     if (written_amount < PGSIZE)
     {
-      printf("writei faile, written only %d\n", written_amount);
-      printf("%p %p %p %p\n", ip, 0, (uint64)PTE2PA(*pte), a - addr + offset);
       iunlock(ip);
       end_op();
       return -1;
@@ -902,8 +895,9 @@ int munmap(void *addr, uint64 len)
   {
     return -1;
   }
-  printf("in munmap, unmapping from %p to %p\n", addr, (uint64)addr + len);
   struct file_vma_info initial_state = *file_vma;
+
+  // the unmap is either at the start, or the end - figure out which one
   if ((uint64)addr == file_vma->addr)
   {
     if (len > file_vma->size)
@@ -931,15 +925,14 @@ int munmap(void *addr, uint64 len)
   }
   if (file_vma->flags & MAP_SHARED)
   {
-    printf("calling mmap_shared with %p ip %p %d\n", addr, file_vma->file->ip, file_vma->file->ip->ref);
-    if (mmap_shared(p->pagetable, (uint64)addr, len, file_vma->file->ip, offset) != 0)
+    if (update_mmapped_file(p->pagetable, (uint64)addr, len, file_vma->file->ip, offset) != 0)
     {
-      printf("mmap shared failed\n");
+      // if we couldnt update the mmapped files, dont throw away the changes
       *file_vma = initial_state;
       return -1;
     }
-    printf("mmap shared is fine\n");
   }
+  // free the physical pages
   for (uint64 address = (uint64)addr; address < (uint64)addr + len; address += PGSIZE)
   {
     pte_t *pte = walk(p->pagetable, address, 0);
