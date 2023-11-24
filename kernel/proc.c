@@ -150,6 +150,8 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+
+  // init mmaped files
   for (uint i = 0; i < NMMAPED; i++)
   {
     p->mmaped_files[i].used = 0;
@@ -342,6 +344,15 @@ fork(void)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
+
+  for (uint i = 0; i < NMMAPED; i++)
+  {
+    if (p->mmaped_files[i].used)
+    {
+      np->mmaped_files[i] = p->mmaped_files[i];
+      filedup(np->mmaped_files[i].file);
+    }
+  }
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
