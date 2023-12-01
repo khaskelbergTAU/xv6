@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -17,6 +21,7 @@ struct spinlock pid_lock;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
+int update_mmapped_file(pagetable_t pgtbl, uint64 addr, uint64 length, struct inode *ip, uint64 offset);
 
 extern char trampoline[]; // trampoline.S
 
@@ -146,7 +151,38 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  // init mmaped files
+  for (uint i = 0; i < NMMAPED; i++)
+  {
+    p->mmaped_files[i].used = 0;
+  }
+  p->mmap_end = MMAP_END;
+
   return p;
+}
+
+static void proc_freemmapped(struct proc *p)
+{
+  for (uint i = 0; i < NMMAPED; i++)
+  {
+    if (p->mmaped_files[i].used)
+    {
+      struct file_vma_info *file_vma = &p->mmaped_files[i];
+      if (file_vma->flags & MAP_SHARED)
+      {
+        update_mmapped_file(p->pagetable, file_vma->addr, file_vma->size, file_vma->file->ip, 0);
+      }
+      fileclose(file_vma->file);
+      for (uint64 addr = file_vma->addr; addr < file_vma->addr + file_vma->size; addr += PGSIZE)
+      {
+        pte_t *pte = walk(p->pagetable, addr, 0);
+        if (pte && (*pte & PTE_V))
+        {
+          uvmunmap(p->pagetable, addr, 1, 1);
+        }
+      }
+    }
+  }
 }
 
 // free a proc structure and the data hanging from it,
@@ -162,6 +198,7 @@ freeproc(struct proc *p)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
   p->sz = 0;
+  p->mmap_end = MMAP_END;
   p->pid = 0;
   p->parent = 0;
   p->name[0] = 0;
@@ -308,6 +345,15 @@ fork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  for (uint i = 0; i < NMMAPED; i++)
+  {
+    if (p->mmaped_files[i].used)
+    {
+      np->mmaped_files[i] = p->mmaped_files[i];
+      filedup(np->mmaped_files[i].file);
+    }
+  }
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -350,6 +396,8 @@ exit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  proc_freemmapped(p);
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
@@ -680,4 +728,220 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+uint64 mmap(uint64 addr, uint64 length, int prot, int flags, int fd, uint64 offset)
+{
+  // simple error checking
+  // addr and offset are always 0.
+  if (length == 0)
+  {
+    return -1;
+  }
+  if (prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC))
+  { // some unknown permission is set
+    return -1;
+  }
+  if (prot == 0)
+  { // no permissions are set
+    return -1;
+  }
+  if ((flags != MAP_SHARED) && (flags != MAP_PRIVATE))
+  { // some unknown flag
+    return -1;
+  }
+  struct proc *p = myproc();
+  if (p->ofile[fd] == 0)
+  {
+    return -1;
+  }
+  if ((flags & MAP_SHARED) && (prot & PROT_WRITE) && (p->ofile[fd]->writable == 0))
+  {
+    return -1;
+  }
+  if ((prot & PROT_READ) && (p->ofile[fd]->readable == 0))
+  {
+    return -1;
+  }
+  if (((~prot & PROT_WRITE) != 0) && (prot & PROT_READ) && (length > PGROUNDUP(p->ofile[fd]->ip->size)))
+  {
+    return -1;
+  }
+  // simple error checking done
+
+  uint entry = 0;
+  for (entry = 0; entry < NMMAPED; entry++)
+  {
+    if (p->mmaped_files[entry].used == 0)
+    {
+      break;
+    }
+  }
+  if (entry == NMMAPED)
+  {
+    return -1;
+  }
+
+  uint64 rounded_size = PGROUNDUP(length);
+  struct file_vma_info *file_vma = &p->mmaped_files[entry];
+  file_vma->addr = p->mmap_end - rounded_size;
+  file_vma->used = 1;
+  p->mmap_end = file_vma->addr;
+  file_vma->size = rounded_size;
+  file_vma->prot = prot;
+  file_vma->flags = flags;
+  file_vma->file = filedup(p->ofile[fd]);
+  return (uint64)file_vma->addr;
+}
+
+struct file_vma_info *find_vma(struct proc *p, uint64 addr)
+{
+  for (uint i = 0; i < NMMAPED; i++)
+  {
+    if (p->mmaped_files[i].used && (p->mmaped_files[i].addr <= addr) && (p->mmaped_files[i].addr + p->mmaped_files[i].size) > addr)
+    {
+      return &p->mmaped_files[i];
+    }
+  }
+  return 0;
+}
+
+int handle_mmap_fault(struct proc *p, uint64 addr)
+{
+  struct file_vma_info *file_vma = find_vma(p, addr);
+  if (file_vma == 0)
+  {
+    return -1;
+  }
+  if (addr - file_vma->addr >= PGROUNDUP(file_vma->size))
+  {
+    return -1;
+  }
+  uint64 va = PGROUNDDOWN(addr);
+  void *pa = kalloc();
+  if (!pa)
+  {
+    return -1;
+  }
+  ilock(file_vma->file->ip);
+  uint to_read = PGSIZE;
+  if (PGSIZE > file_vma->file->ip->size + file_vma->addr - addr)
+  { // theres less than a page untill the end of the file
+    to_read = file_vma->file->ip->size + file_vma->addr - addr;
+  }
+  int read_amnt = readi(file_vma->file->ip, 0, (uint64)pa, addr - file_vma->addr, to_read);
+  if (read_amnt < to_read)
+  {
+    iunlock(file_vma->file->ip);
+    kfree(pa);
+    return -1;
+  }
+  iunlock(file_vma->file->ip);
+  memset(((char *)pa) + read_amnt, 0, PGSIZE - read_amnt);
+  if (mappages(p->pagetable, va, PGSIZE, (uint64)pa, (file_vma->prot << 1) | PTE_U) != 0) // prot << 1 moves all of the permissions to the correct places
+  {
+    kfree(pa);
+    return -1;
+  }
+  return 0;
+}
+
+int update_mmapped_file(pagetable_t pgtbl, uint64 addr, uint64 length, struct inode *ip, uint64 offset)
+{
+  if (addr != PGROUNDDOWN(addr))
+  {
+    panic("update_mmaped_file: addr");
+  }
+  if (length != PGROUNDDOWN(length))
+  {
+    panic("update_mmaped_file: length");
+  }
+  begin_op();
+  ilock(ip);
+  for (uint64 a = addr; a < addr + length; a += PGSIZE)
+  {
+    pte_t *pte = walk(pgtbl, a, 0);
+    if ((pte == 0) || ((*pte & PTE_V) == 0) || ((*pte & PTE_D) == 0))
+    {
+      continue;
+    }
+    int written_amount = writei(ip, 0, (uint64)PTE2PA(*pte), a - addr + offset, PGSIZE);
+    if (written_amount < PGSIZE)
+    {
+      iunlock(ip);
+      end_op();
+      return -1;
+    }
+  }
+  iunlock(ip);
+  end_op();
+  return 0;
+}
+
+int munmap(void *addr, uint64 len)
+{
+  struct proc *p = myproc();
+  uint64 offset = 0;
+  if ((uint64)addr != PGROUNDDOWN((uint64)addr))
+  {
+    return -1;
+  }
+  if ((uint64)len != PGROUNDDOWN((uint64)len))
+  {
+    return -1;
+  }
+  struct file_vma_info *file_vma = find_vma(p, (uint64)addr);
+  if (file_vma == 0)
+  {
+    return -1;
+  }
+  struct file_vma_info initial_state = *file_vma;
+
+  // the unmap is either at the start, or the end - figure out which one
+  if ((uint64)addr == file_vma->addr)
+  {
+    if (len > file_vma->size)
+    {
+      return -1;
+    }
+    if (len == file_vma->size)
+    {
+      file_vma->used = 0;
+    }
+    else
+    {
+      file_vma->addr = file_vma->addr + len;
+      file_vma->size = file_vma->size - len;
+    }
+  }
+  else
+  {
+    if (((uint64)addr + len) != (file_vma->addr + file_vma->size))
+    {
+      return -1;
+    }
+    file_vma->size = file_vma->size - len;
+    offset = file_vma->size;
+  }
+  if (file_vma->flags & MAP_SHARED)
+  {
+    if (update_mmapped_file(p->pagetable, (uint64)addr, len, file_vma->file->ip, offset) != 0)
+    {
+      // if we couldnt update the mmapped files, dont throw away the changes
+      *file_vma = initial_state;
+      return -1;
+    }
+  }
+  // free the physical pages
+  for (uint64 address = (uint64)addr; address < (uint64)addr + len; address += PGSIZE)
+  {
+    pte_t *pte = walk(p->pagetable, address, 0);
+    if ((pte != 0) && (*pte & PTE_V))
+    {
+      uvmunmap(p->pagetable, address, 1, 1);
+    }
+  }
+  if(file_vma->used == 0)
+    fileclose(file_vma->file);
+  return 0;
 }

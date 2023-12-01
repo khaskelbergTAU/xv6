@@ -49,7 +49,9 @@ usertrap(void)
   
   // save user program counter.
   p->trapframe->epc = r_sepc();
-  
+
+  int fault_ok = 0;
+
   if(r_scause() == 8){
     // system call
 
@@ -65,9 +67,27 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
-    // ok
-  } else {
+    fault_ok = 1;
+  }
+  else if ((r_scause() == 0xd) || (r_scause() == 0xf))
+  { // load/store fault
+    uint64 addr = r_stval();
+    pte_t *pte;
+    if ((addr < MAXVA) && (((pte = walk(p->pagetable, addr, 0)) == 0) || ((*pte & PTE_V) == 0)))
+    { // this is an unmapped page
+      fault_ok = !handle_mmap_fault(p, addr);
+    }
+    else
+    { // this was a protection failure
+      fault_ok = 0;
+    }
+  }
+  else if ((which_dev = devintr()) != 0)
+  {
+    fault_ok = 1;
+  }
+  if (!fault_ok)
+  {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     setkilled(p);

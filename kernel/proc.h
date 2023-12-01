@@ -79,6 +79,24 @@ struct trapframe {
   /* 280 */ uint64 t6;
 };
 
+/*
+  used = 0 means we can use it.
+  size = 0 means unlimited spaced at this entry.
+  if size != we can only map up to size bytes.
+  on unmap, we consolidate by going back as much as we can through unused vmas,
+  and then make the first one as big as it can be.
+*/
+
+struct file;
+struct file_vma_info
+{
+  int used;
+  uint64 addr;
+  uint64 size;
+  int prot;
+  int flags;
+  struct file *file;
+};
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 // Per-process state
@@ -104,4 +122,6 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  struct file_vma_info mmaped_files[NMMAPED]; // always sorted array of vmas, first used then unused
+  uint64 mmap_end;
 };
